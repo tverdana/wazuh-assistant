@@ -12,7 +12,7 @@ cd lab
 ./lab.sh alerts    # ssh brute force, sudo, FIM, prompt-injection log lines
 ./lab.sh verify    # curl: reads return 200, every write returns 403
 ./lab.sh status    # containers + agents (lab-db-01 shows "disconnected")
-./lab.sh down      # stop (data kept);  ./lab.sh nuke  also deletes volumes
+./lab.sh down      # stop containers (containers + data kept);  ./lab.sh nuke  removes everything
 ```
 
 ## What is in the lab

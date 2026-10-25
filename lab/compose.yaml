@@ -18,6 +18,8 @@ x-lab-agent: &lab-agent
     - ./config/agent/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
     # seeds /var/log/lab/auth.log, /lab/fim and a rootcheck bait before start
     - ./config/agent/entrypoint-scripts:/entrypoint-scripts:ro
+    # existing agent keys exported by lab.sh up (gitignored): keep agent ids 001/002
+    - ./.agent-keys:/lab-keys:ro
 
 services:
   lab-web-01:

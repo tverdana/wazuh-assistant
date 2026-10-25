@@ -8,6 +8,7 @@
 # Lab: upstream wazuh-docker clone (contains generated certs + demo passwords)
 lab/wazuh-docker/
 lab/certs/
+lab/.agent-keys/
 
 # Python
 __pycache__/
@@ -27,3 +28,6 @@ artifacts/
 
 # Logs
 *.log
+
+# Demo runtime (pid files, logs)
+.run/

@@ -7,7 +7,7 @@
 #   ./lab.sh verify   curl demo: read-only users can read, writes are denied
 #   ./lab.sh alerts [ssh|fim|sudo|injection|all]   generate real alerts
 #   ./lab.sh status   containers + agent list
-#   ./lab.sh down     stop the lab (keeps data);  ./lab.sh nuke  also deletes volumes
+#   ./lab.sh down     stop the containers (keeps containers + data);  ./lab.sh nuke  removes everything
 set -euo pipefail
 
 LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -83,10 +83,25 @@ sys.exit(0 if any(a["name"]==n and a["status"]=="active" for a in d["data"]["aff
   done
 }
 
+export_agent_keys() {
+  # A recreated agent container would enroll again as a duplicate name (or get a
+  # new id). Export each lab agent's existing key from the manager so the seed
+  # script can restore it (lab/.agent-keys is gitignored, mode 700/600).
+  local keys; keys="$(docker exec wazuh-lab-wazuh.manager-1 cat /var/ossec/etc/client.keys 2>/dev/null)" || return 0
+  local name
+  for name in lab-web-01 lab-db-01; do
+    (umask 077; printf '%s\n' "$keys" | awk -v n="$name" '$2 == n' > "$LAB_DIR/.agent-keys/$name.key")
+    [ -s "$LAB_DIR/.agent-keys/$name.key" ] || rm -f "$LAB_DIR/.agent-keys/$name.key"
+  done
+}
+
 cmd_up() {
   [ -f "$LAB_DIR/admin.env" ] || cmd_setup
-  compose up -d
+  mkdir -p -m 700 "$LAB_DIR/.agent-keys"
+  compose up -d wazuh.indexer wazuh.manager wazuh.dashboard
   wait_for "Wazuh API" bash -c "[ -n \"\$(cd '$LAB_DIR' && ./lab.sh _token)\" ]"
+  export_agent_keys
+  compose up -d lab-web-01 lab-db-01
   wait_for "Wazuh indexer" curl -sf --cacert "$LAB_DIR/certs/root-ca.pem" \
     --resolve wazuh.indexer:9200:127.0.0.1 https://wazuh.indexer:9200 -o /dev/null -w '' \
     -u "$(. "$LAB_DIR/admin.env"; echo "$INDEXER_ADMIN_USER:$INDEXER_ADMIN_PASSWORD")"
@@ -113,7 +128,7 @@ case "${1:-}" in
   verify) bash "$LAB_DIR/scripts/verify_readonly.sh" ;;
   alerts) bash "$LAB_DIR/scripts/gen_alerts.sh" "${2:-all}" ;;
   status) cmd_status ;;
-  down)   compose down ;;
+  down)   compose stop ;;
   nuke)   compose down -v ;;
   _token) api_admin_token ;;
   *) sed -n '2,12p' "$0"; exit 1 ;;
