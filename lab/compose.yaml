@@ -1,0 +1,40 @@
+# Wazuh LAB (local only). Official wazuh-docker single-node v4.14.9 is included
+# unmodified; compose.lab-override.yml only rebinds its ports to 127.0.0.1.
+# Two Wazuh agents are added so the lab produces real alerts.
+name: wazuh-lab
+
+include:
+  - path:
+      - wazuh-docker/single-node/docker-compose.yml
+      - compose.lab-override.yml
+
+x-lab-agent: &lab-agent
+  image: wazuh/wazuh-agent:4.14.9
+  restart: unless-stopped
+  depends_on:
+    - wazuh.manager
+  volumes:
+    # ossec.conf with lab additions (fake auth log, FIM dir, fast rootcheck)
+    - ./config/agent/ossec.conf:/wazuh-config-mount/etc/ossec.conf:ro
+    # seeds /var/log/lab/auth.log, /lab/fim and a rootcheck bait before start
+    - ./config/agent/entrypoint-scripts:/entrypoint-scripts:ro
+
+services:
+  lab-web-01:
+    <<: *lab-agent
+    hostname: lab-web-01
+    container_name: lab-web-01
+    environment:
+      - WAZUH_MANAGER_SERVER=wazuh.manager
+      - WAZUH_AGENT_NAME=lab-web-01
+      - WAZUH_AGENT_GROUP=default
+
+  # Enrolled, then stopped by `lab.sh up` to simulate a disconnected host.
+  lab-db-01:
+    <<: *lab-agent
+    hostname: lab-db-01
+    container_name: lab-db-01
+    environment:
+      - WAZUH_MANAGER_SERVER=wazuh.manager
+      - WAZUH_AGENT_NAME=lab-db-01
+      - WAZUH_AGENT_GROUP=default

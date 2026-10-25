@@ -1,0 +1,29 @@
+# Secrets — never commit
+.env
+*.env
+.env.*
+!.env.example
+!*.env.example
+
+# Lab: upstream wazuh-docker clone (contains generated certs + demo passwords)
+lab/wazuh-docker/
+lab/certs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+artifacts/
+.adk/
+*.db
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs
+*.log

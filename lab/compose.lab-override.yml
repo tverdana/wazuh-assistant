@@ -1,0 +1,15 @@
+# Merged on top of the official single-node compose file.
+# Expose only what the lab needs, and only on loopback. Agents enroll over
+# the internal compose network, so 1514/1515/514 are not published at all.
+services:
+  wazuh.manager:
+    ports: !override
+      - "127.0.0.1:55000:55000"
+
+  wazuh.indexer:
+    ports: !override
+      - "127.0.0.1:9200:9200"
+
+  wazuh.dashboard:
+    ports: !override
+      - "127.0.0.1:443:5601"
