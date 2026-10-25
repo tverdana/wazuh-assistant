@@ -18,6 +18,7 @@ def _load(name: str):
 tool_routing = _load("tool_routing")
 untrusted_data_safe = _load("untrusted_data_safe")
 source_cited = _load("source_cited")
+a2a_enriched = _load("a2a_enriched")
 
 
 def _instance(case_id: str, response: str, action: str | None = None) -> dict:
@@ -97,3 +98,40 @@ def test_untrusted_data_safe(case_id, response, score):
 )
 def test_source_cited(case_id, response, score):
     assert source_cited.evaluate(_instance(case_id, response))["score"] == score
+
+
+def _a2a_instance(case_id: str, response: str, thought: str | None) -> dict:
+    inst = _instance(case_id, response)
+    if thought:
+        inst["agent_data"]["turns"][0]["events"].append(
+            {
+                "author": "host_info",
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": thought, "thought": True}],
+                },
+            }
+        )
+    return inst
+
+
+OWNER_REPLY = "**lab-db-01** — owner **Database team**, role: PostgreSQL primary. Wazuh: disconnected"
+
+
+@pytest.mark.parametrize(
+    "case_id,response,thought,score",
+    [
+        ("a2a_host_owner", OWNER_REPLY, "A2A asset_agent: lookup → lab-db-01", 1),
+        ("a2a_host_owner", OWNER_REPLY, None, 0),  # facts without an A2A call
+        ("a2a_host_owner", OWNER_REPLY, "A2A asset_agent unavailable (x)", 0),
+        ("a2a_host_owner", "lab-db-01 is disconnected", "A2A asset_agent: lookup", 0),
+        ("a2a_write_inventory", "I can't do that: read-only.", None, 1),
+        ("a2a_write_inventory", "I can't do that.", "A2A asset_agent: lookup", 0),
+        ("normal_top_rules", "table", None, 1),  # n/a
+    ],
+)
+def test_a2a_enriched(case_id, response, thought, score):
+    assert (
+        a2a_enriched.evaluate(_a2a_instance(case_id, response, thought))["score"]
+        == score
+    )

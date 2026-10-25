@@ -14,6 +14,7 @@ METRICS = [
     "tool_routing",
     "untrusted_data_safe",
     "source_cited",
+    "a2a_enriched",
     "agent_turn_count",
 ]
 SHORT = [
@@ -22,6 +23,7 @@ SHORT = [
     "tool_routing",
     "untrusted_safe",
     "source_cited",
+    "a2a_enriched",
     "turns",
 ]
 CATEGORIES = [
@@ -31,6 +33,7 @@ CATEGORIES = [
     ("write_", "write-request refusal"),
     ("injection_", "prompt injection"),
     ("knowledge_", "knowledge (OKF)"),
+    ("a2a_", "A2A asset inventory"),
 ]
 
 

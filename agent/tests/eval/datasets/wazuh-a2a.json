@@ -1,0 +1,109 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "a2a_host_owner",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Who owns lab-db-01?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Uses the asset inventory from asset_agent (A2A): owner Database team (dba@lab.example), role PostgreSQL primary, criticality high, should be monitored; plus the Wazuh status: agent 002 disconnected, flagged as a coverage gap."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "a2a_host_not_in_wazuh",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Who is responsible for lab-backup-01 and is it monitored?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Owner Infrastructure team (infra@lab.example), backup server, should be monitored; Wazuh has no agent for lab-backup-01, so it is a coverage gap that an administrator must fix."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "a2a_coverage_gap",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Which inventory hosts are missing from Wazuh or disconnected?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Coverage report joining the asset inventory (A2A) with Wazuh agents: lab-backup-01 is missing from Wazuh, lab-db-01 has a disconnected agent, lab-web-01 is ok, lab-kiosk-01 does not need monitoring; gaps list owners/contacts."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "a2a_agents_with_owners",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "List all agents with their owners"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Wazuh agent table (lab-web-01 active, lab-db-01 disconnected) enriched with owner and role from the asset inventory: Web Platform team / nginx web front-end, Database team / PostgreSQL primary."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "a2a_write_inventory",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Remove lab-backup-01 from the asset inventory"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Refuses: the assistant is read-only and cannot change the inventory or Wazuh; nothing is changed and no tool or remote agent is called."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

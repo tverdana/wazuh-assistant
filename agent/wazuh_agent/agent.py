@@ -8,6 +8,8 @@ Graph:
                                                             ├─ explain_rule ──┼→ respond
                                                             ├─ sca_summary ───┤
                                                             ├─ knowledge ─────┤
+                                                            ├─ host_info ─────┤  (+A2A)
+                                                            ├─ coverage_gap ──┤  (+A2A)
                                                             ├─ clarify ───────┤
                                                             └─ refuse ────────┘
 
@@ -20,6 +22,9 @@ Graph:
 - Each tool node calls one read-only MCP tool of wazuh_mcp; `knowledge` picks a
   concept of the OKF bundle (list_knowledge) and reads it (read_knowledge), and
   the reply always cites the concept's file.
+- list_agents, host_info and coverage_gap also ask the remote `asset_agent` over
+  A2A (assets.py) for owner / role / should_be_monitored. If it is down, the
+  Wazuh part still answers and the reply says the inventory is unavailable.
 - respond formats the structured tool output deterministically (formatting.py).
   Alert text written by monitored hosts is untrusted: it is rendered as inert
   quoted data, injection-looking alerts are flagged, and it never reaches an LLM.
@@ -45,6 +50,7 @@ from google.adk.workflow import Workflow
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from wazuh_agent.assets import ask_inventory
 from wazuh_agent.formatting import format_tool_result
 
 MODEL = os.getenv("AGENT_MODEL", "gemini-3.8-flash")
@@ -63,7 +69,9 @@ CAPABILITIES = (
     "- explain a rule — “explain rule 5712”\n"
     "- SCA / CIS benchmark results — “SCA summary for lab-web-01”\n"
     "- runbooks & design decisions — “what should I do about the SSH brute force?”, "
-    "“why is the assistant read-only?”"
+    "“why is the assistant read-only?”\n"
+    "- asset inventory over A2A — “who owns lab-db-01?”, "
+    "“which inventory hosts are missing from Wazuh?”"
 )
 REFUSAL_TEXT = (
     "Sorry, I can only answer read-only questions about the Wazuh lab "
@@ -113,6 +121,8 @@ class Intent(StrEnum):
     EXPLAIN_RULE = "explain_rule"
     SCA_SUMMARY = "sca_summary"
     KNOWLEDGE = "knowledge"
+    HOST_INFO = "host_info"
+    COVERAGE_GAP = "coverage_gap"
     WRITE_REQUEST = "write_request"
     UNCLEAR = "unclear"
     OFF_TOPIC = "off_topic"
@@ -178,11 +188,16 @@ TOOL_ARGS: dict[Intent, list[str]] = {
     Intent.EXPLAIN_RULE: ["rule_id"],
     Intent.SCA_SUMMARY: ["agent"],
     Intent.KNOWLEDGE: ["topic"],
+    Intent.HOST_INFO: ["agent"],
+    Intent.COVERAGE_GAP: [],
 }
 REQUIRED_ARGS: dict[Intent, list[str]] = {
     Intent.EXPLAIN_RULE: ["rule_id"],
     Intent.SCA_SUMMARY: ["agent"],
+    Intent.HOST_INFO: ["agent"],
 }
+# Intents whose node also calls asset_agent over A2A
+A2A_INTENTS = {Intent.LIST_AGENTS, Intent.HOST_INFO, Intent.COVERAGE_GAP}
 ARG_LABELS = {
     "rule_id": "the rule ID (e.g. 5712)",
     "agent": "the agent name or ID (e.g. lab-web-01 or 001)",
@@ -190,6 +205,7 @@ ARG_LABELS = {
 OPERATION_LABELS = {
     Intent.EXPLAIN_RULE: "explain the rule",
     Intent.SCA_SUMMARY: "show the SCA results",
+    Intent.HOST_INFO: "look up the host's owner and status",
 }
 
 # ---------------------------------------------------------------------------
@@ -256,6 +272,10 @@ _RULE_IN_TEXT_RE = re.compile(r"\brule\s*(?:id\s*)?#?\s*(\d{1,6})\b", re.IGNOREC
 _BARE_NUMBER_RE = re.compile(r"^\s*#?(\d{1,6})\s*[.!]?\s*$")
 _TOPIC_WORD_RE = re.compile(r"[\w.-]+")
 # "which runbooks do we have?": the kind of concept, kept when the LLM gives no topic
+# "list all agents with their owners" is a list, not one host's lookup
+_MANY_HOSTS_RE = re.compile(
+    r"\b(?:all|every|each|agents|hosts|servers|machines)\b", re.IGNORECASE
+)
 _KNOWLEDGE_KIND_RE = re.compile(
     r"\b(?:runbooks?|playbooks?|adrs?|decisions?|references?)\b", re.IGNORECASE
 )
@@ -460,7 +480,8 @@ classify_intent = LlmAgent(
 Only classify the message and extract parameters. Never answer the question.
 
 intent is exactly one of:
-- list_agents: list Wazuh agents / endpoints / hosts and their connection status
+- list_agents: list Wazuh agents / endpoints / hosts and their connection status, also
+  "all agents with their owners / roles"
 - list_alerts: show recent alerts, events or detections (optional time window, minimum level,
   agent, rule ID), e.g. "show alerts for rule 5712", "which alerts fired on lab-web-01"
 - alert_stats: counts, top N, breakdown or statistics of alerts grouped by rule, agent, level,
@@ -468,6 +489,10 @@ intent is exactly one of:
 - explain_rule: explain what a Wazuh rule (numeric rule ID) means or detects
   ("what is rule 5712", "explain rule 5712"); listing the alerts of a rule is list_alerts
 - sca_summary: SCA / CIS benchmark / configuration assessment / hardening results of an agent
+- host_info: who owns / is responsible for / is the contact of ONE specific host or agent, what
+  its role or criticality is ("who owns lab-db-01?", "what is lab-web-01 used for?")
+- coverage_gap: monitoring coverage: which inventory / asset hosts are missing from Wazuh, have
+  no agent, are disconnected or unmonitored ("are all our servers monitored?")
 - knowledge: guidance from the team's knowledge base: what to do / how to handle / procedure /
   runbook / playbook for a situation, why a design decision was made (ADRs), or which runbooks
   and decisions exist. Asking HOW a human would fix, block or restart something is knowledge;
@@ -509,6 +534,10 @@ def _turn_log(ctx: Context, user_text: str, action: str) -> list[dict[str, str]]
     turns = list(ctx.state.get(TURNS_KEY) or [])
     turns.append({"user": user_text[:300], "action": action})
     return turns[-HISTORY_LIMIT:]
+
+
+def _thought(text: str) -> types.Content:
+    return types.Content(role="model", parts=[types.Part(text=text, thought=True)])
 
 
 def _decision(action: str) -> types.Content:
@@ -558,6 +587,13 @@ def route_intent(ctx: Context, node_input: IntentResult | None) -> Event | None:
             ctx, user_text, "refuse", REFUSAL_TEXT, "refused an off-topic request"
         )
 
+    if (
+        intent == Intent.HOST_INFO
+        and not node_input.agent
+        and not pending
+        and _MANY_HOSTS_RE.search(user_text)
+    ):
+        intent = Intent.LIST_AGENTS  # owners of all hosts: enriched agent list
     # A bare follow-up (e.g. just "5712") continues the pending operation
     if intent == Intent.UNCLEAR and pending:
         intent = Intent(pending["intent"])
@@ -600,6 +636,8 @@ def route_intent(ctx: Context, node_input: IntentResult | None) -> Event | None:
 
     call = ", ".join(f"{k}={v}" for k, v in args.items())
     action = f"ran {intent.value}({call})"
+    if intent in A2A_INTENTS:
+        action += " + A2A asset_agent"
     return Event(
         content=_decision(action),
         output=args,
@@ -608,8 +646,60 @@ def route_intent(ctx: Context, node_input: IntentResult | None) -> Event | None:
     )
 
 
-async def list_agents(ctx: Context, node_input: dict) -> NodeResult:
-    return await _call_mcp_tool(ctx, "list_agents", node_input)
+async def list_agents(ctx: Context, node_input: dict):
+    """Wazuh agents, enriched with owner/role from asset_agent (A2A)."""
+    result = await _call_mcp_tool(ctx, "list_agents", node_input)
+    names = [a["name"] for a in (result.data or {}).get("agents", [])]
+    if names:
+        reply, note = await ask_inventory({"op": "lookup", "hosts": names})
+        result.data["inventory"] = reply.model_dump() if reply else None
+        yield Event(content=_thought(note))
+    yield Event(output=result.model_dump())
+
+
+async def host_info(ctx: Context, node_input: dict):
+    """Owner/role from asset_agent (A2A) + the Wazuh agent status of one host."""
+    host = node_input["agent"]
+    wazuh = await _call_mcp_tool(ctx, "list_agents", {"status": "all", "limit": 50})
+    agent = next(
+        (
+            a
+            for a in (wazuh.data or {}).get("agents", [])
+            if a["name"].lower() == host.lower() or a["id"] == host
+        ),
+        None,
+    )
+    name = agent["name"] if agent else host
+    reply, note = await ask_inventory({"op": "lookup", "hosts": [name]})
+    yield Event(content=_thought(note))
+    data = {
+        "host": name,
+        "agent": agent,
+        "wazuh_error": wazuh.error,
+        "inventory": reply.model_dump() if reply else None,
+    }
+    yield Event(
+        output=NodeResult(
+            kind="tool", tool="host_info", args=node_input, data=data
+        ).model_dump()
+    )
+
+
+async def coverage_gap(ctx: Context, node_input: dict):
+    """Inventory hosts (asset_agent, A2A) vs Wazuh agents: missing / disconnected."""
+    wazuh = await _call_mcp_tool(ctx, "list_agents", {"status": "all", "limit": 50})
+    reply, note = await ask_inventory({"op": "list"})
+    yield Event(content=_thought(note))
+    data = {
+        "agents": (wazuh.data or {}).get("agents", []),
+        "wazuh_error": wazuh.error,
+        "inventory": reply.model_dump() if reply else None,
+    }
+    yield Event(
+        output=NodeResult(
+            kind="tool", tool="coverage_gap", args=node_input, data=data
+        ).model_dump()
+    )
 
 
 async def list_alerts(ctx: Context, node_input: dict) -> NodeResult:
@@ -764,6 +854,8 @@ OPERATION_NODES = {
     Intent.EXPLAIN_RULE.value: explain_rule,
     Intent.SCA_SUMMARY.value: sca_summary,
     Intent.KNOWLEDGE.value: knowledge,
+    Intent.HOST_INFO.value: host_info,
+    Intent.COVERAGE_GAP.value: coverage_gap,
 }
 
 root_agent = Workflow(

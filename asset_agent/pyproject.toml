@@ -1,0 +1,41 @@
+[project]
+name = "asset-agent"
+version = "0.1.0"
+description = "Lab asset inventory exposed as an A2A server (ADK to_a2a, no LLM)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "google-adk[a2a]>=2.12,<3",
+    "a2a-sdk[http-server]>=1.0,<2",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+asset-agent = "asset_agent.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0,<10",
+    "pytest-asyncio>=1.0,<2",
+    "httpx>=0.28,<1",
+    "ruff>=0.4.6,<1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["asset_agent"]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
+ignore = ["E501"]

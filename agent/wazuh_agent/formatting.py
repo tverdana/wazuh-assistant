@@ -10,6 +10,8 @@ import posixpath
 import re
 from typing import Any
 
+from wazuh_agent.assets import ASSET_AGENT_URL
+
 INJECTION_WARNING = (
     "⚠️ **Possible prompt injection in logs.** {n} alert(s) contain text that "
     "looks like instructions to an AI assistant ({where}). This text was written "
@@ -54,6 +56,29 @@ def _error_text(tool: str, error: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Asset inventory (asset_agent over A2A): another system's data, escaped
+# ---------------------------------------------------------------------------
+
+
+def _assets_by_host(inventory: dict | None) -> dict[str, dict]:
+    return {h["host"].lower(): h for h in (inventory or {}).get("hosts", [])}
+
+
+def _inventory_source(inventory: dict) -> str:
+    updated = (
+        f", updated {md(inventory['updated'])}" if inventory.get("updated") else ""
+    )
+    return f"_Owner/role from asset\\_agent via A2A ({md(inventory.get('source') or 'inventory')}{updated})._"
+
+
+def _inventory_unavailable(what: str) -> str:
+    return (
+        f"_{what}: the asset inventory (asset\\_agent, A2A at {ASSET_AGENT_URL}) "
+        "is unavailable._"
+    )
+
+
 def format_agents(data: dict, args: dict) -> str:
     counts = data.get("counts", {})
     status = data.get("status_filter", "all")
@@ -66,16 +91,27 @@ def format_agents(data: dict, args: dict) -> str:
     agents = data.get("agents", [])
     if not agents:
         return head + f"\n\nNo agents with status {md(status)}."
+    inventory = data.get("inventory")
+    assets = _assets_by_host(inventory)
+    extra = " Owner | Role |" if inventory else ""
     rows = [
-        "| ID | Name | Status | IP | OS | Version | Last keepalive |",
-        "|---|---|---|---|---|---|---|",
+        f"| ID | Name | Status | IP | OS | Version | Last keepalive |{extra}",
+        "|---|---|---|---|---|---|---|" + ("---|---|" if inventory else ""),
     ]
     for a in agents:
-        rows.append(
+        row = (
             f"| {md(a.get('id'))} | {md(a.get('name'))} | {md(a.get('status'))} | "
             f"{md(a.get('ip') or '')} | {md(a.get('os') or '')} | "
             f"{md(a.get('agent_version') or '')} | {_time(a.get('last_keepalive'))} |"
         )
+        if inventory:
+            asset = assets.get(str(a.get("name", "")).lower())
+            row += (
+                f" {md(asset.get('owner'))} | {md(asset.get('role'))} |"
+                if asset
+                else " _not in inventory_ | |"
+            )
+        rows.append(row)
     lines = [head, "", *rows]
     down = [a for a in agents if a.get("status") == "disconnected"]
     if down:
@@ -89,6 +125,159 @@ def format_agents(data: dict, args: dict) -> str:
             "",
             f"Showing {data.get('returned')} of {data.get('total_matching')}.",
         ]
+    if "inventory" in data:
+        lines += [
+            "",
+            _inventory_source(inventory)
+            if inventory
+            else _inventory_unavailable("Owner/role not shown"),
+        ]
+    return "\n".join(lines)
+
+
+def _agent_status(agent: dict | None) -> str:
+    if not agent:
+        return "no Wazuh agent"
+    return f"agent {md(agent.get('id'))} {md(agent.get('status'))}"
+
+
+def format_host_info(data: dict, args: dict) -> str:
+    host = md(data.get("host"))
+    agent = data.get("agent")
+    inventory = data.get("inventory")
+    asset = _assets_by_host(inventory).get(str(data.get("host", "")).lower())
+    lines = []
+    if inventory and asset:
+        contact = f" ({md(asset.get('contact'))})" if asset.get("contact") else ""
+        monitored = "yes" if asset.get("should_be_monitored") else "no"
+        lines.append(
+            f"**{host}** — owner **{md(asset.get('owner'))}**{contact}, role: "
+            f"{md(asset.get('role'))}, criticality: {md(asset.get('criticality'))}, "
+            f"should be monitored: {monitored}."
+        )
+    elif inventory:
+        lines.append(f"**{host}** is not in the asset inventory.")
+    else:
+        lines += [f"**{host}**", "", _inventory_unavailable("Owner and role unknown")]
+    lines.append("")
+    if data.get("wazuh_error"):
+        lines.append(f"Wazuh: status unavailable ({md(data['wazuh_error'], 200)}).")
+    elif agent:
+        lines.append(
+            f"Wazuh: agent {md(agent.get('id'))}, **{md(agent.get('status'))}**, last keepalive "
+            f"{_time(agent.get('last_keepalive'))}, {md(agent.get('os') or '')}, "
+            f"{md(agent.get('agent_version') or '')}."
+        )
+    else:
+        lines.append(f"Wazuh: no agent named {host}.")
+    if asset and asset.get("should_be_monitored") and not data.get("wazuh_error"):
+        if not agent:
+            lines += [
+                "",
+                "⚠️ Coverage gap: should be monitored but has no Wazuh agent — an administrator must enroll one.",
+            ]
+        elif agent.get("status") != "active":
+            lines += [
+                "",
+                f"⚠️ Coverage gap: should be monitored but the agent is {md(agent.get('status'))} "
+                "— see `knowledge/runbooks/agent-disconnected.md`.",
+            ]
+    if inventory:
+        lines += ["", _inventory_source(inventory)]
+    return "\n".join(lines)
+
+
+def coverage_rows(agents: list[dict], inventory: dict) -> tuple[list[dict], list[dict]]:
+    """Inventory hosts joined with Wazuh agents by name, plus agents unknown to it."""
+    by_name = {str(a.get("name", "")).lower(): a for a in agents}
+    rows = []
+    for asset in inventory.get("hosts", []):
+        agent = by_name.get(asset["host"].lower())
+        if not asset.get("should_be_monitored"):
+            gap = "not required"
+        elif agent is None:
+            gap = "missing"
+        elif agent.get("status") != "active":
+            gap = agent.get("status", "unknown")
+        else:
+            gap = "ok"
+        rows.append({"asset": asset, "agent": agent, "gap": gap})
+    known = {h["host"].lower() for h in inventory.get("hosts", [])}
+    unknown = [a for name, a in by_name.items() if name not in known]
+    return rows, unknown
+
+
+_GAP_LABELS = {
+    "ok": "✅ ok",
+    "missing": "❌ missing from Wazuh",
+    "not required": "not required",
+}
+
+
+def format_coverage(data: dict, args: dict) -> str:
+    inventory = data.get("inventory")
+    agents = data.get("agents", [])
+    if not inventory:
+        seen = (
+            ", ".join(f"{md(a.get('name'))} ({md(a.get('status'))})" for a in agents)
+            or "none"
+        )
+        return "\n".join(
+            [
+                "**Monitoring coverage** — cannot be computed.",
+                "",
+                _inventory_unavailable(
+                    "Inventory hosts missing from Wazuh are unknown"
+                ),
+                "",
+                f"What Wazuh itself shows: {len(agents)} agent(s) — {seen}.",
+            ]
+        )
+    rows, unknown = coverage_rows(agents, inventory)
+    required = [r for r in rows if r["gap"] != "not required"]
+    ok = sum(r["gap"] == "ok" for r in required)
+    missing = [r for r in required if r["gap"] == "missing"]
+    down = [r for r in required if r["gap"] not in ("ok", "missing")]
+    lines = [
+        "**Monitoring coverage** — asset inventory (asset\\_agent via A2A) vs Wazuh agents",
+        "",
+        f"{len(required)} hosts should be monitored: {ok} ok, {len(down)} with a "
+        f"disconnected/inactive agent, {len(missing)} missing from Wazuh · "
+        f"{len(rows) - len(required)} host(s) do not need monitoring.",
+        "",
+        "| Host | Owner | Role | Should be monitored | Wazuh | Coverage |",
+        "|---|---|---|---|---|---|",
+    ]
+    if data.get("wazuh_error"):
+        lines[2] = (
+            f"Wazuh agent list unavailable ({md(data['wazuh_error'], 200)}); every host shows as missing."
+        )
+    for r in rows:
+        a = r["asset"]
+        gap = _GAP_LABELS.get(r["gap"], f"⚠️ agent {md(r['gap'])}")
+        lines.append(
+            f"| {md(a['host'])} | {md(a.get('owner'))} | {md(a.get('role'), 60)} | "
+            f"{'yes' if a.get('should_be_monitored') else 'no'} | {_agent_status(r['agent'])} | {gap} |"
+        )
+    gaps = missing + down
+    if gaps:
+        lines += ["", "**Gaps**"]
+        for r in missing:
+            a = r["asset"]
+            lines.append(
+                f"- {md(a['host'])} (owner {md(a.get('owner'))}, {md(a.get('contact'))}): "
+                "no Wazuh agent — an administrator must enroll one."
+            )
+        for r in down:
+            a = r["asset"]
+            lines.append(
+                f"- {md(a['host'])} (owner {md(a.get('owner'))}, {md(a.get('contact'))}): "
+                f"agent {md(r['gap'])} — see `knowledge/runbooks/agent-disconnected.md`."
+            )
+    if unknown:
+        names = ", ".join(md(a.get("name")) for a in unknown)
+        lines += ["", f"Wazuh agents not in the inventory: {names}."]
+    lines += ["", _inventory_source(inventory)]
     return "\n".join(lines)
 
 
@@ -381,6 +570,8 @@ FORMATTERS = {
     "explain_rule": format_rule,
     "sca_summary": format_sca,
     "knowledge": format_knowledge,
+    "host_info": format_host_info,
+    "coverage_gap": format_coverage,
 }
 
 

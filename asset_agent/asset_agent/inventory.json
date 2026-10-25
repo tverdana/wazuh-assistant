@@ -1,0 +1,38 @@
+{
+  "source": "lab asset inventory (fictional CMDB export)",
+  "updated": "2026-10-25",
+  "hosts": [
+    {
+      "host": "lab-web-01",
+      "owner": "Web Platform team",
+      "contact": "web-team@lab.example",
+      "role": "nginx web front-end",
+      "criticality": "high",
+      "should_be_monitored": true
+    },
+    {
+      "host": "lab-db-01",
+      "owner": "Database team",
+      "contact": "dba@lab.example",
+      "role": "PostgreSQL primary",
+      "criticality": "high",
+      "should_be_monitored": true
+    },
+    {
+      "host": "lab-backup-01",
+      "owner": "Infrastructure team",
+      "contact": "infra@lab.example",
+      "role": "backup server (nightly snapshots)",
+      "criticality": "medium",
+      "should_be_monitored": true
+    },
+    {
+      "host": "lab-kiosk-01",
+      "owner": "Facilities",
+      "contact": "facilities@lab.example",
+      "role": "lobby display kiosk (isolated VLAN)",
+      "criticality": "low",
+      "should_be_monitored": false
+    }
+  ]
+}

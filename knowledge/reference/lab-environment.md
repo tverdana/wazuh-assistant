@@ -22,6 +22,7 @@ status: stable
 | Agent 001 `lab-web-01` | active; fake auth log `/var/log/lab/auth.log`, realtime FIM on `/lab/fim`, rootcheck every 5 min |
 | Agent 002 `lab-db-01` | enrolled, then stopped on purpose → disconnected ([runbook](/runbooks/agent-disconnected.md)) |
 | `wazuh_mcp` | read-only MCP server, `http://127.0.0.1:8020/mcp` |
+| `asset_agent` | A2A server, `http://127.0.0.1:8030` (card: `/.well-known/agent-card.json`); inventory: lab-web-01, lab-db-01, lab-backup-01 (no Wazuh agent), lab-kiosk-01 (not monitored) |
 | `wazuh_agent` playground | `http://127.0.0.1:8502` |
 
 Read-only identities: API `assistant_api_ro`, indexer `assistant_idx_ro`

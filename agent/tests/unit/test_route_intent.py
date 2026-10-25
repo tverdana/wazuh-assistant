@@ -228,7 +228,10 @@ def test_turn_log_is_bounded_and_code_written():
     )
     log = event.actions.state_delta[TURNS_KEY]
     assert len(log) == 6
-    assert log[-1] == {"user": "show agents", "action": "ran list_agents()"}
+    assert log[-1] == {
+        "user": "show agents",
+        "action": "ran list_agents() + A2A asset_agent",
+    }
 
 
 def test_model_failure_ends_turn_without_tool():
