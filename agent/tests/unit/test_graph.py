@@ -79,7 +79,11 @@ async def test_clarify_then_complete(fake_gemini, mcp_calls):
 
     fake_gemini.script = [intent_reply(intent="unclear")]
     await conv.send("5712")
-    assert mcp_calls == [("explain_rule", {"rule_id": 5712})]
+    # explain_rule, then the runbooks that list the rule
+    assert mcp_calls == [
+        ("explain_rule", {"rule_id": 5712}),
+        ("list_knowledge", {"rule_id": 5712, "limit": 3}),
+    ]
     assert (
         "Pending operation waiting for user input: explain_rule"
         in fake_gemini.bodies[-1]

@@ -27,6 +27,7 @@ EXPECTED_ACTION = {
 EXPECTED_BY_PREFIX = {
     "off_topic_": r"^refused an off-topic request$",
     "write_": r"^refused a write request",
+    "knowledge_": r"^ran knowledge\(",
 }
 
 

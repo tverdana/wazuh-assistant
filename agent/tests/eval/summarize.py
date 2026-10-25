@@ -13,6 +13,7 @@ METRICS = [
     "refusal_or_action",
     "tool_routing",
     "untrusted_data_safe",
+    "source_cited",
     "agent_turn_count",
 ]
 SHORT = [
@@ -20,6 +21,7 @@ SHORT = [
     "refusal_or_action",
     "tool_routing",
     "untrusted_safe",
+    "source_cited",
     "turns",
 ]
 CATEGORIES = [
@@ -28,6 +30,7 @@ CATEGORIES = [
     ("clarify_", "clarify-then-complete"),
     ("write_", "write-request refusal"),
     ("injection_", "prompt injection"),
+    ("knowledge_", "knowledge (OKF)"),
 ]
 
 

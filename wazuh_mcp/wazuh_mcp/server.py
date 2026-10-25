@@ -1,8 +1,9 @@
 """Wazuh LAB MCP server (mcp Python SDK 2.x `MCPServer` — the former FastMCP —
 over Streamable HTTP, default http://127.0.0.1:8020/mcp).
 
-Five read-only tools for wazuh_agent:
+Read-only tools for wazuh_agent:
   list_agents / list_alerts / alert_stats / explain_rule / sca_summary
+  list_knowledge / read_knowledge   (OKF knowledge bundle in knowledge/)
 
 Design:
 - Read-only end to end: lab identities with read-only RBAC, GET/_search-only
@@ -24,6 +25,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+from wazuh_mcp import knowledge as kb
 from wazuh_mcp.clients import WazuhApi, WazuhError, WazuhIndexer
 from wazuh_mcp.settings import load_settings
 from wazuh_mcp.untrusted import UNTRUSTED_NOTICE, clean, looks_like_injection
@@ -758,6 +760,152 @@ async def sca_summary(agent: str) -> SCASummary:
         failed_checks_total=failed_total,
         failed_checks_sample=sample,
         note=note,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Knowledge (OKF bundle) tools
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeHit(BaseModel):
+    id: str = Field(description="OKF concept id, e.g. runbooks/ssh-bruteforce")
+    path: str = Field(
+        description="file to cite, e.g. knowledge/runbooks/ssh-bruteforce.md"
+    )
+    type: str
+    title: str
+    description: str | None = None
+    tags: list[str] = []
+    wazuh_rules: list[int] = []
+    status: str = "stable"
+    trust: str = Field(
+        description="OKF trust tier: unverified | machine-confirmed | human-reviewed"
+    )
+    score: int = 0
+
+
+class KnowledgeList(BaseModel):
+    bundle: str
+    okf_version: str | None = None
+    query: str | None = None
+    type_filter: str | None = None
+    rule_id: int | None = None
+    total: int
+    hits: list[KnowledgeHit]
+
+
+class KnowledgeSource(BaseModel):
+    id: str | None = None
+    title: str | None = None
+    resource: str
+
+
+class KnowledgeDoc(KnowledgeHit):
+    generated_by: str | None = None
+    generated_at: str | None = None
+    sources: list[KnowledgeSource] = []
+    body: str
+    truncated: bool = False
+
+
+def _hit(c: kb.Concept, score: int = 0) -> KnowledgeHit:
+    meta = c.frontmatter
+    return KnowledgeHit(
+        id=c.id,
+        path=c.path,
+        type=str(meta.get("type")),
+        title=str(meta.get("title") or c.id.rsplit("/", 1)[-1]),
+        description=meta.get("description"),
+        tags=[str(t) for t in meta.get("tags") or []][:12],
+        wazuh_rules=[int(r) for r in meta.get("wazuh_rules") or []],
+        status=str(meta.get("status") or "stable"),
+        trust=kb.trust_tier(meta),
+        score=score,
+    )
+
+
+def _okf_version(root) -> str | None:
+    try:
+        meta, _ = kb.parse_document((root / "index.md").read_text(encoding="utf-8"))
+    except (OSError, kb.KnowledgeError):
+        return None
+    return str(meta["okf_version"]) if meta.get("okf_version") else None
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_knowledge(
+    query: str | None = None,
+    type: str | None = None,
+    rule_id: int | None = None,
+    limit: int = 10,
+) -> KnowledgeList:
+    """List concepts of the OKF knowledge bundle (runbooks, ADRs, reference),
+    ranked by keyword relevance to `query`. Read-only.
+
+    Args:
+        query: optional keywords, e.g. "ssh brute force" or "agent disconnected"
+        type: optional concept type filter, e.g. Runbook, Architecture Decision Record
+        rule_id: optional Wazuh rule id; returns concepts whose wazuh_rules list it
+        limit: maximum number of concepts to return (1-20)
+    """
+    query = clean(query, 200) or None
+    type_filter = clean(type, 64) or None
+    if rule_id is not None:
+        rule_id = check_rule_id(rule_id)
+    limit = clamp(limit, 1, 20)
+    root = kb.bundle_root()
+    try:
+        ranked = kb.search(kb.load_bundle(root), query, type_filter, rule_id)
+    except kb.KnowledgeError as e:
+        raise ToolError(str(e)) from e
+    log.info(
+        "list_knowledge query=%r type=%s rule=%s -> %d",
+        query,
+        type_filter,
+        rule_id,
+        len(ranked),
+    )
+    return KnowledgeList(
+        bundle=f"{root.name}/",
+        okf_version=_okf_version(root),
+        query=query,
+        type_filter=type_filter,
+        rule_id=rule_id,
+        total=len(ranked),
+        hits=[_hit(c, s) for s, c in ranked[:limit]],
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def read_knowledge(concept_id: str) -> KnowledgeDoc:
+    """Read one concept of the OKF knowledge bundle: frontmatter, sources and
+    markdown body. Cite `path` when using it. Read-only.
+
+    Args:
+        concept_id: concept id from list_knowledge, e.g. runbooks/ssh-bruteforce
+    """
+    try:
+        concept = kb.read_concept(concept_id)
+    except kb.KnowledgeError as e:
+        raise ToolError(str(e)) from e
+    meta = concept.frontmatter
+    generated = meta.get("generated") if isinstance(meta.get("generated"), dict) else {}
+    sources = [
+        KnowledgeSource(
+            id=src.get("id"), title=src.get("title"), resource=str(src["resource"])
+        )
+        for src in meta.get("sources") or []
+        if isinstance(src, dict) and src.get("resource")
+    ]
+    log.info("read_knowledge %s", concept.id)
+    return KnowledgeDoc(
+        **_hit(concept).model_dump(),
+        generated_by=generated.get("by"),
+        generated_at=str(generated["at"]) if generated.get("at") else None,
+        sources=sources,
+        body=concept.body[: kb.MAX_BODY_CHARS],
+        truncated=len(concept.body) > kb.MAX_BODY_CHARS,
     )
 
 

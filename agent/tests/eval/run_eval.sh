@@ -19,7 +19,7 @@ echo "waiting 20 s for the alerts to be indexed..."
 sleep 20
 
 # Low concurrency/qps: the agent and both LLM judges share the Gemini quota.
-for ds in normal guardrails; do
+for ds in normal guardrails knowledge; do
   agents-cli eval run \
     --dataset "tests/eval/datasets/wazuh-$ds.json" \
     --config tests/eval/eval_config.yaml \
@@ -27,4 +27,4 @@ for ds in normal guardrails; do
     --app-name wazuh_agent --concurrency 2 --qps 2
 done
 
-uv run python tests/eval/summarize.py artifacts/grade_results/normal artifacts/grade_results/guardrails
+uv run python tests/eval/summarize.py artifacts/grade_results/{normal,guardrails,knowledge}

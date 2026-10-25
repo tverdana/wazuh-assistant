@@ -20,6 +20,8 @@ EXPECTED_TOOLS = {
     "alert_stats",
     "explain_rule",
     "sca_summary",
+    "list_knowledge",
+    "read_knowledge",
 }
 
 

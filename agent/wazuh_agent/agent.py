@@ -7,6 +7,7 @@ Graph:
                                                             ├─ alert_stats ───┤
                                                             ├─ explain_rule ──┼→ respond
                                                             ├─ sca_summary ───┤
+                                                            ├─ knowledge ─────┤
                                                             ├─ clarify ───────┤
                                                             └─ refuse ────────┘
 
@@ -16,7 +17,9 @@ Graph:
 - route_intent decides in code: write requests (delete/restart/change/block...)
   and off-topic or jailbreak requests are refused before any tool runs, whatever
   the LLM said; parameters are validated; missing ones trigger clarify.
-- Each tool node calls exactly one read-only MCP tool of wazuh_mcp.
+- Each tool node calls one read-only MCP tool of wazuh_mcp; `knowledge` picks a
+  concept of the OKF bundle (list_knowledge) and reads it (read_knowledge), and
+  the reply always cites the concept's file.
 - respond formats the structured tool output deterministically (formatting.py).
   Alert text written by monitored hosts is untrusted: it is rendered as inert
   quoted data, injection-looking alerts are flagged, and it never reaches an LLM.
@@ -58,7 +61,9 @@ CAPABILITIES = (
     "- list recent alerts — “alerts level 10+ in the last 2h on lab-web-01”\n"
     "- alert statistics — “top rules in the last 24h”, “alerts per agent”\n"
     "- explain a rule — “explain rule 5712”\n"
-    "- SCA / CIS benchmark results — “SCA summary for lab-web-01”"
+    "- SCA / CIS benchmark results — “SCA summary for lab-web-01”\n"
+    "- runbooks & design decisions — “what should I do about the SSH brute force?”, "
+    "“why is the assistant read-only?”"
 )
 REFUSAL_TEXT = (
     "Sorry, I can only answer read-only questions about the Wazuh lab "
@@ -107,6 +112,7 @@ class Intent(StrEnum):
     ALERT_STATS = "alert_stats"
     EXPLAIN_RULE = "explain_rule"
     SCA_SUMMARY = "sca_summary"
+    KNOWLEDGE = "knowledge"
     WRITE_REQUEST = "write_request"
     UNCLEAR = "unclear"
     OFF_TOPIC = "off_topic"
@@ -146,6 +152,11 @@ class IntentResult(BaseModel):
     min_level: int | None = Field(default=None, description="minimum rule level 0-16")
     group_by: GroupBy | None = Field(default=None, description="alert_stats grouping")
     rule_id: int | None = Field(default=None, description="numeric Wazuh rule id")
+    topic: str | None = Field(
+        default=None,
+        description="knowledge: 1-6 keywords for the situation or decision, "
+        "e.g. 'ssh brute force', 'agent disconnected'",
+    )
 
 
 class NodeResult(BaseModel):
@@ -166,6 +177,7 @@ TOOL_ARGS: dict[Intent, list[str]] = {
     Intent.ALERT_STATS: ["group_by", "since"],
     Intent.EXPLAIN_RULE: ["rule_id"],
     Intent.SCA_SUMMARY: ["agent"],
+    Intent.KNOWLEDGE: ["topic"],
 }
 REQUIRED_ARGS: dict[Intent, list[str]] = {
     Intent.EXPLAIN_RULE: ["rule_id"],
@@ -242,6 +254,11 @@ _AGENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SINCE_RE = re.compile(r"^\s*(\d{1,4})\s*([mhdw])\w*\s*$", re.IGNORECASE)
 _RULE_IN_TEXT_RE = re.compile(r"\brule\s*(?:id\s*)?#?\s*(\d{1,6})\b", re.IGNORECASE)
 _BARE_NUMBER_RE = re.compile(r"^\s*#?(\d{1,6})\s*[.!]?\s*$")
+_TOPIC_WORD_RE = re.compile(r"[\w.-]+")
+# "which runbooks do we have?": the kind of concept, kept when the LLM gives no topic
+_KNOWLEDGE_KIND_RE = re.compile(
+    r"\b(?:runbooks?|playbooks?|adrs?|decisions?|references?)\b", re.IGNORECASE
+)
 
 
 def is_write_request(text: str) -> bool:
@@ -288,6 +305,10 @@ def normalize_args(intent: Intent, args: dict[str, Any]) -> dict[str, Any]:
         elif name == "group_by":
             if str(value) in GroupBy.__members__.values():
                 out[name] = str(value)
+        elif name == "topic":
+            topic = " ".join(_TOPIC_WORD_RE.findall(str(value)))[:80]
+            if topic:
+                out[name] = topic
     return out
 
 
@@ -295,9 +316,18 @@ def normalize_args(intent: Intent, args: dict[str, Any]) -> dict[str, Any]:
 # MCP Server
 # ---------------------------------------------------------------------------
 
+MCP_TOOLS = [
+    "list_agents",
+    "list_alerts",
+    "alert_stats",
+    "explain_rule",
+    "sca_summary",
+    "list_knowledge",
+    "read_knowledge",
+]
 mcp_toolset = McpToolset(
     connection_params=StreamableHTTPConnectionParams(url=MCP_URL, timeout=10),
-    tool_filter=[intent.value for intent in TOOL_ARGS],
+    tool_filter=MCP_TOOLS,
 )
 
 
@@ -438,6 +468,10 @@ intent is exactly one of:
 - explain_rule: explain what a Wazuh rule (numeric rule ID) means or detects
   ("what is rule 5712", "explain rule 5712"); listing the alerts of a rule is list_alerts
 - sca_summary: SCA / CIS benchmark / configuration assessment / hardening results of an agent
+- knowledge: guidance from the team's knowledge base: what to do / how to handle / procedure /
+  runbook / playbook for a situation, why a design decision was made (ADRs), or which runbooks
+  and decisions exist. Asking HOW a human would fix, block or restart something is knowledge;
+  asking the assistant to DO it is write_request
 - write_request: ANY request to change something, even combined with a read request: delete,
   remove, restart, stop, enable/disable, block or ban an IP, isolate a host, run an active
   response or command, change a rule or configuration, add/register/upgrade agents,
@@ -460,6 +494,9 @@ Parameter rules:
 6. group_by (alert_stats): rule | agent | level | group | srcip | mitre | tactic;
    "per host" -> agent, "by source IP" -> srcip, "by technique" -> mitre.
 7. rule_id: an integer.
+7b. topic (knowledge): 1-6 keywords naming the situation or decision ("ssh brute force",
+    "agent disconnected", "fim authorized_keys", "read-only decision"); null when the user only
+    asks which runbooks/decisions exist.
 8. If a pending operation exists and the current message only supplies the missing data
    (e.g. just "5712" or "lab-web-01"), keep the pending intent and merge the known parameters.
 9. If the current message asks for something new, classify it on its own.
@@ -543,6 +580,9 @@ def route_intent(ctx: Context, node_input: IntentResult | None) -> Event | None:
         )
         if match:
             args["rule_id"] = int(match.group(1))
+    if intent == Intent.KNOWLEDGE and not args.get("topic"):
+        if kind := _KNOWLEDGE_KIND_RE.search(user_text):
+            args["topic"] = kind.group(0).lower()
     args = normalize_args(intent, args)
 
     missing = [name for name in REQUIRED_ARGS.get(intent, []) if name not in args]
@@ -583,11 +623,114 @@ async def alert_stats(ctx: Context, node_input: dict) -> NodeResult:
 
 
 async def explain_rule(ctx: Context, node_input: dict) -> NodeResult:
-    return await _call_mcp_tool(ctx, "explain_rule", node_input)
+    result = await _call_mcp_tool(ctx, "explain_rule", node_input)
+    if result.data is not None:
+        # point to the runbooks that list this rule (OKF `wazuh_rules`)
+        related = await _call_mcp_tool(
+            ctx, "list_knowledge", {"rule_id": node_input["rule_id"], "limit": 3}
+        )
+        if related.data:
+            result.data["related_knowledge"] = related.data.get("hits", [])
+    return result
 
 
 async def sca_summary(ctx: Context, node_input: dict) -> NodeResult:
     return await _call_mcp_tool(ctx, "sca_summary", node_input)
+
+
+# Words that only say *which kind* of knowledge is wanted, not about what
+_KNOWLEDGE_TYPES = {
+    "runbook": "Runbook",
+    "playbook": "Runbook",
+    "adr": "Architecture Decision Record",
+    "decision": "Architecture Decision Record",
+    "reference": "Reference",
+}
+_GENERIC_KNOWLEDGE_WORDS = {
+    "runbook",
+    "runbooks",
+    "playbook",
+    "playbooks",
+    "adr",
+    "adrs",
+    "decision",
+    "decisions",
+    "design",
+    "architecture",
+    "record",
+    "records",
+    "reference",
+    "references",
+    "knowledge",
+    "base",
+    "bundle",
+    "docs",
+    "documentation",
+    "doc",
+    "all",
+    "available",
+    "list",
+    "any",
+    "our",
+    "we",
+    "have",
+    "the",
+    "a",
+    "for",
+    "about",
+    "which",
+    "what",
+    "exist",
+    "existing",
+}
+KNOWLEDGE_MIN_SCORE = 3  # weaker matches are only body mentions
+
+
+async def knowledge(ctx: Context, node_input: dict) -> NodeResult:
+    """Pick the best OKF concept in code, read it; or list / report not found."""
+    words = [w.lower() for w in _TOPIC_WORD_RE.findall(node_input.get("topic") or "")]
+    type_filter = next(
+        (
+            t
+            for w in words
+            for prefix, t in _KNOWLEDGE_TYPES.items()
+            if w.startswith(prefix)
+        ),
+        None,
+    )
+    specific = [w for w in words if w not in _GENERIC_KNOWLEDGE_WORDS]
+    result = NodeResult(kind="tool", tool="knowledge", args=node_input)
+
+    if not specific:  # "which runbooks do we have?"
+        args = {"limit": 20, **({"type": type_filter} if type_filter else {})}
+        listing = await _call_mcp_tool(ctx, "list_knowledge", args)
+        result.error = listing.error
+        result.data = {"mode": "list", "listing": listing.data}
+        return result
+
+    query = " ".join(specific)
+    args = {
+        "query": query,
+        "limit": 4,
+        **({"type": type_filter} if type_filter else {}),
+    }
+    found = await _call_mcp_tool(ctx, "list_knowledge", args)
+    if found.error:
+        result.error = found.error
+        return result
+    hits = [
+        h
+        for h in found.data.get("hits", [])
+        if h.get("score", 0) >= KNOWLEDGE_MIN_SCORE
+    ]
+    if not hits:
+        catalog = await _call_mcp_tool(ctx, "list_knowledge", {"limit": 20})
+        result.data = {"mode": "not_found", "query": query, "listing": catalog.data}
+        return result
+    doc = await _call_mcp_tool(ctx, "read_knowledge", {"concept_id": hits[0]["id"]})
+    result.error = doc.error
+    result.data = {"mode": "doc", "query": query, "doc": doc.data, "also": hits[1:3]}
+    return result
 
 
 def clarify(node_input: NodeResult) -> NodeResult:
@@ -620,6 +763,7 @@ OPERATION_NODES = {
     Intent.ALERT_STATS.value: alert_stats,
     Intent.EXPLAIN_RULE.value: explain_rule,
     Intent.SCA_SUMMARY.value: sca_summary,
+    Intent.KNOWLEDGE.value: knowledge,
 }
 
 root_agent = Workflow(
@@ -628,7 +772,8 @@ root_agent = Workflow(
     # manifest's value. Renaming the agent only here makes the two disagree, and
     # anything selecting traces by name stops finding this agent's.
     name="wazuh_agent",
-    description="Read-only Wazuh SIEM assistant: agents, alerts, statistics, rules and SCA.",
+    description="Read-only Wazuh SIEM assistant: agents, alerts, statistics, rules, SCA "
+    "and runbooks/ADRs from an OKF knowledge bundle.",
     edges=[
         ("START", prepare_input, classify_intent, route_intent),
         (route_intent, {**OPERATION_NODES, "clarify": clarify, "refuse": refuse}),

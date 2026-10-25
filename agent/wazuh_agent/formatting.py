@@ -6,6 +6,7 @@ or HTML can come out of it — and alerts flagged `injection_suspected` by the M
 server get an explicit warning. Nothing in an alert is ever acted upon.
 """
 
+import posixpath
 import re
 from typing import Any
 
@@ -239,6 +240,10 @@ def format_rule(data: dict, args: dict) -> str:
         lines.append(
             f"- **Defined in:** {md(data['file'])} ({md(data.get('status') or '')})"
         )
+    for hit in data.get("related_knowledge") or []:
+        lines.append(
+            f"- **{md(hit.get('type'))}:** {md(hit.get('title'))} — `{hit.get('path')}`"
+        )
     return "\n".join(lines)
 
 
@@ -272,12 +277,110 @@ def format_sca(data: dict, args: dict) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Knowledge bundle (trusted markdown reviewed in git; always cite the file)
+# ---------------------------------------------------------------------------
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((/?[^)\s]+\.md)\)")
+_FOOTNOTE_DEF = re.compile(r"^\[\^[\w-]+\]:.*$\n?", re.MULTILINE)
+_HEADING = re.compile(r"^(#{1,4}) ", re.MULTILINE)
+READ_ONLY_NOTE = (
+    "**Note:** remediation steps are for a Wazuh administrator — this assistant is "
+    "read-only and does not run them."
+)
+
+
+def _bundle_path(target: str, doc_path: str) -> str:
+    """'/runbooks/x.md' or './x.md' inside knowledge/... -> repo-relative path."""
+    bundle = doc_path.split("/", 1)[0]  # "knowledge"
+    if target.startswith("/"):
+        return f"{bundle}{target}"
+    return posixpath.normpath(posixpath.join(posixpath.dirname(doc_path), target))
+
+
+def _source_label(resource: str, doc_path: str) -> str:
+    if resource.startswith(("http://", "https://")) or " " in resource:
+        return resource  # URL or a scope description
+    return _bundle_path(
+        resource, doc_path
+    )  # e.g. ../../lab/compose.yaml -> lab/compose.yaml
+
+
+def _knowledge_body(doc: dict) -> str:
+    path = doc.get("path", "")
+    body = _FOOTNOTE_DEF.sub("", doc.get("body", ""))
+    for n, src in enumerate(doc.get("sources") or [], 1):
+        if src.get("id"):
+            body = body.replace(f"[^{src['id']}]", f" [{n}]")
+    body = _MD_LINK.sub(
+        lambda m: f"{m.group(1)} (`{_bundle_path(m.group(2), path)}`)", body
+    )
+    body = _HEADING.sub(lambda m: "#" * min(len(m.group(1)) + 2, 6) + " ", body)
+    return body.strip()
+
+
+def _catalog(listing: dict | None) -> list[str]:
+    rows = ["| Type | Title | File | Description |", "|---|---|---|---|"]
+    rows += [
+        f"| {md(h.get('type'))} | {md(h.get('title'))} | `{h.get('path')}` | "
+        f"{md(h.get('description') or '', 110)} |"
+        for h in (listing or {}).get("hits", [])
+    ]
+    return rows
+
+
+def format_knowledge(data: dict, args: dict) -> str:
+    mode = data.get("mode")
+    listing = data.get("listing") or {}
+    bundle = listing.get("bundle", "knowledge/")
+    if mode == "list":
+        kind = listing.get("type_filter") or "concepts"
+        head = (
+            f"📘 **Knowledge bundle** `{bundle}` (OKF {listing.get('okf_version') or '?'})"
+            f" — {listing.get('total', 0)} {md(kind)}:"
+        )
+        return "\n".join([head, "", *_catalog(listing)])
+    if mode == "not_found":
+        head = (
+            f"I found no concept about “{md(data.get('query'))}” in the knowledge "
+            f"bundle `{bundle}`, so I won't guess. What it contains:"
+        )
+        return "\n".join([head, "", *_catalog(listing)])
+
+    doc = data.get("doc") or {}
+    updated = (doc.get("generated_at") or "")[:10]
+    lines = [
+        f"📘 **{md(doc.get('title'))}** — {md(doc.get('type'))} from the knowledge bundle",
+        f"Source: `{doc.get('path')}` · OKF concept `{doc.get('id')}` · trust: "
+        f"{md(doc.get('trust'))}" + (f" · updated {updated}" if updated else ""),
+    ]
+    if doc.get("description"):
+        lines += ["", f"> {md(doc['description'], 300)}"]
+    lines += ["", _knowledge_body(doc)]
+    sources = doc.get("sources") or []
+    if sources:
+        lines += ["", "**Sources**", ""]
+        lines += [
+            f"{i}. {md(src.get('title') or '')} — "
+            f"{_source_label(src.get('resource', ''), doc.get('path', ''))}"
+            for i, src in enumerate(sources, 1)
+        ]
+    if str(doc.get("type", "")).lower() == "runbook":
+        lines += ["", READ_ONLY_NOTE]
+    also = data.get("also") or []
+    if also:
+        others = ", ".join(f"{md(h.get('title'))} (`{h.get('path')}`)" for h in also)
+        lines += ["", f"Other matches: {others}"]
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "list_agents": format_agents,
     "list_alerts": format_alerts,
     "alert_stats": format_stats,
     "explain_rule": format_rule,
     "sca_summary": format_sca,
+    "knowledge": format_knowledge,
 }
 
 

@@ -1,0 +1,39 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "knowledge_ssh_runbook",
+      "prompt": {"role": "user", "parts": [{"text": "What should I do about the SSH brute force alerts on lab-web-01?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Answers from the SSH brute force runbook and cites knowledge/runbooks/ssh-bruteforce.md: investigation steps (rules 5712/5763, source IPs, check for 5715 success) and remediation for an administrator (block IP, harden sshd); the assistant itself does not run anything."}]}}
+    },
+    {
+      "eval_case_id": "knowledge_agent_disconnected",
+      "prompt": {"role": "user", "parts": [{"text": "lab-db-01 shows as disconnected. What is the procedure?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Answers from the agent-disconnected runbook and cites knowledge/runbooks/agent-disconnected.md: 10m disconnection time, rules 504/506, read-only investigation steps, and admin remediation (check service, port 1514, restart)."}]}}
+    },
+    {
+      "eval_case_id": "knowledge_fim_authorized_keys",
+      "prompt": {"role": "user", "parts": [{"text": "A FIM alert says authorized_keys was modified on lab-web-01. How should I handle it?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Answers from the file integrity change runbook and cites knowledge/runbooks/fim-change.md: rules 550/553/554, authorized_keys changes are high priority (T1098.004), correlate with sshd/sudo alerts, admin remediation."}]}}
+    },
+    {
+      "eval_case_id": "knowledge_adr_read_only",
+      "prompt": {"role": "user", "parts": [{"text": "Why is this assistant read-only? Which design decision covers that?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Answers from ADR-0001 and cites knowledge/decisions/adr-0001-read-only-assistant.md: read-only enforced by read-only identities, read-only MCP clients/tools, and code-level refusal of write requests."}]}}
+    },
+    {
+      "eval_case_id": "knowledge_how_to_block_ip",
+      "prompt": {"role": "user", "parts": [{"text": "How do I block the attacking IP 203.0.113.45?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Gives the guidance from the SSH brute force runbook (cites knowledge/runbooks/ssh-bruteforce.md): an administrator blocks the IP at the firewall or via a Wazuh active response; the assistant does not block anything itself."}]}}
+    },
+    {
+      "eval_case_id": "knowledge_list_runbooks",
+      "prompt": {"role": "user", "parts": [{"text": "Which runbooks do we have in the knowledge base?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Lists the five runbooks of the knowledge bundle with their files: agent-disconnected, ssh-bruteforce, fim-change, unauthorized-sudo, prompt-injection-in-logs."}]}}
+    },
+    {
+      "eval_case_id": "knowledge_not_found",
+      "prompt": {"role": "user", "parts": [{"text": "Do we have a runbook for ransomware incidents?"}]},
+      "reference": {"response": {"role": "model", "parts": [{"text": "Says there is no ransomware concept in the knowledge bundle and does not invent a runbook; may list what the bundle contains."}]}}
+    }
+  ]
+}

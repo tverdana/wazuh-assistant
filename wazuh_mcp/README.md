@@ -8,7 +8,7 @@ mcp Python SDK 2.x `MCPServer` (the former FastMCP), Streamable HTTP at
 cd wazuh_mcp
 uv sync
 uv run wazuh-mcp                       # MCP_HOST=127.0.0.1 MCP_PORT=8020 by default
-uv run pytest tests/unit               # 77 offline tests (fake Wazuh via httpx.MockTransport)
+uv run pytest tests/unit               # 138 offline tests (fake Wazuh via httpx.MockTransport, OKF bundle checks)
 uv run pytest tests/integration -m live   # against the running lab
 ```
 
@@ -21,6 +21,12 @@ uv run pytest tests/integration -m live   # against the running lab
 | `alert_stats(group_by="rule", since="24h", top=10)` | indexer terms aggregation | buckets `{key, count, max_level, label}`, total, other_count | group_by ∈ rule/agent/level/group/srcip/mitre/tactic, top ≤ 20 |
 | `explain_rule(rule_id)` | API `/rules`, `/mitre/techniques`, `/mitre/tactics` + indexer count | level, severity, plain-English summary (e.g. correlation 8× in 120 s), conditions, MITRE technique + tactic, compliance, 24h activity | 3 techniques |
 | `sca_summary(agent)` | API `/sca/{id}`, `/sca/{id}/checks/{policy}?result=failed` | score, pass/fail/invalid per policy, 5 failed checks | 10 policies |
+| `list_knowledge(query=None, type=None, rule_id=None, limit=10)` | OKF v0.2 bundle `../knowledge/` | concepts ranked by keyword score (title > tags/type/description > body, exact `wazuh_rules` match): id, path to cite, type, title, trust tier | limit ≤ 20 |
+| `read_knowledge(concept_id)` | one concept file | frontmatter (type, title, sources, generated, trust tier) + markdown body | body ≤ 8000 chars; id regex, path must stay in the bundle, no symlinks, no `index.md`/`log.md` |
+
+`tests/unit/test_knowledge_bundle.py` checks that the repo's bundle conforms to OKF v0.2
+(§8 index files, §9 log, §11 `type` in every concept), that footnotes point at `sources`,
+internal links and repo-relative sources resolve, and every concept is listed in its index.
 
 ## Security
 
