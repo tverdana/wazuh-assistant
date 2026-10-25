@@ -132,9 +132,16 @@ def test_tool_route_with_validated_args():
     )
     assert event.actions.route == "list_alerts"
     # only list_alerts parameters survive; agent id is zero-padded
-    assert event.output == {"since": "2h", "min_level": 10, "agent": "001"}
+    assert event.output == {
+        "since": "2h",
+        "min_level": 10,
+        "agent": "001",
+        "rule_id": 5712,
+    }
     log = event.actions.state_delta[TURNS_KEY]
-    assert log[-1]["action"] == "ran list_alerts(since=2h, min_level=10, agent=001)"
+    assert log[-1]["action"] == (
+        "ran list_alerts(since=2h, min_level=10, agent=001, rule_id=5712)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -155,6 +162,15 @@ def test_normalize_args_drops_invalid_values(args, expected):
 def test_status_and_group_by_must_be_known_values():
     assert normalize_args(Intent.LIST_AGENTS, {"status": "deleted"}) == {}
     assert normalize_args(Intent.ALERT_STATS, {"group_by": "full_log"}) == {}
+
+
+def test_alerts_for_a_rule_take_rule_id_from_text():
+    event = _route(
+        "Show alerts for rule 5405 in the last 7 days",
+        IntentResult(intent=Intent.LIST_ALERTS, since="7d"),
+    )
+    assert event.actions.route == "list_alerts"
+    assert event.output == {"since": "7d", "rule_id": 5405}
 
 
 def test_missing_rule_id_asks_and_remembers_operation():

@@ -118,6 +118,8 @@ def format_alerts(data: dict, args: dict) -> str:
         filters.append(f"level ≥ {data['min_level']}")
     if data.get("agent"):
         filters.append(f"agent {md(data['agent'])}")
+    if data.get("rule_id"):
+        filters.append(f"rule {md(data['rule_id'])}")
     total, returned = data.get("total_matching", 0), data.get("returned", 0)
     head = f"**Alerts** — {', '.join(filters)}: {total} matching"
     alerts = data.get("alerts", [])

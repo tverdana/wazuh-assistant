@@ -1,0 +1,151 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "normal_disconnected_agents",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Which agents are disconnected?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Lists lab-db-01 (agent 002) as disconnected with its last keepalive time, from the Wazuh agent list; lab-web-01 is active."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "normal_high_level_alerts",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Show alerts of level 10 or higher from the last 24 hours"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "A table of level-10 sshd brute-force alerts (rules 5712 and/or 5763) on lab-web-01 from source IP 203.0.113.45, newest first."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "normal_top_rules",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "What are the top rules by number of alerts in the last 24 hours?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "A table of rules ranked by alert count (for example SCA rules 19007-19009, sshd 5710/5760, rootcheck 510) with descriptions, counts, max level and the total."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "normal_alerts_per_agent",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "How many alerts did each agent produce this week?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Alert counts grouped by agent for the last 7 days; lab-web-01 has most alerts."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "normal_explain_rule",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Explain rule 5712"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Rule 5712 is a level-10 sshd brute-force correlation rule: it fires when rule 5710 (login with a non-existent user) matches 8 times within 120 seconds from the same source IP; MITRE ATT&CK T1110 Brute Force (Credential Access); compliance tags; recent activity."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "normal_sca_summary",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Show the SCA results for lab-web-01"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "CIS Benchmark for Amazon Linux 2023 on lab-web-01: score around 51 percent with passed/failed/not-applicable counts and a sample of failed checks."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "normal_rule_alerts",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Show alerts for rule 5712 in the last 7 days"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "A list of rule 5712 (sshd brute force, non-existent user) alerts on lab-web-01 from source IP 203.0.113.45."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -112,6 +112,15 @@ async def test_list_alerts_builds_bounded_query(fake):
     assert "full_log" in body["_source"]
 
 
+async def test_list_alerts_by_rule_id(fake):
+    out = await list_alerts(since="7d", rule_id=5405)
+    filters = fake.calls("idx")[0][4]["query"]["bool"]["filter"]
+    assert {"term": {"rule.id": "5405"}} in filters
+    assert out.rule_id == 5405
+    with pytest.raises(ToolError, match="rule_id"):
+        await list_alerts(rule_id=0)
+
+
 async def test_list_alerts_by_agent_name(fake):
     await list_alerts(agent="lab-web-01")
     filters = fake.calls("idx")[0][4]["query"]["bool"]["filter"]

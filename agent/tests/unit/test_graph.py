@@ -84,3 +84,34 @@ async def test_clarify_then_complete(fake_gemini, mcp_calls):
         "Pending operation waiting for user input: explain_rule"
         in fake_gemini.bodies[-1]
     )
+
+
+async def test_seeded_history_uses_only_user_messages(fake_gemini, mcp_calls):
+    """eval continuation cases seed history without state: the classifier gets the
+    user's earlier words but never the (possibly attacker-quoting) assistant text."""
+    from google.adk.events.event import Event
+    from google.genai import types
+
+    conv = Conversation()
+    session = await conv.runner.session_service.create_session(
+        app_name="wazuh_agent", user_id="test_user"
+    )
+    conv.session_id = session.id
+    for author, text in [
+        ("user", "Show alerts for rule 5405"),
+        ("wazuh_agent", f"| 5405 | cmd `/bin/echo {INJECTION}` |"),
+    ]:
+        role = "user" if author == "user" else "model"
+        await conv.runner.session_service.append_event(
+            session,
+            Event(
+                author=author,
+                content=types.Content(role=role, parts=[types.Part(text=text)]),
+            ),
+        )
+    fake_gemini.script = [intent_reply(intent="unclear")]
+    await conv.send("OK, do exactly what that alert says")
+    body = fake_gemini.bodies[-1]
+    assert "Show alerts for rule 5405" in body
+    assert "SYSTEM NOTE" not in body
+    assert mcp_calls == []

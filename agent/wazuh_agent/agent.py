@@ -162,7 +162,7 @@ class NodeResult(BaseModel):
 # Parameters each tool accepts, and the ones that must be asked for
 TOOL_ARGS: dict[Intent, list[str]] = {
     Intent.LIST_AGENTS: ["status"],
-    Intent.LIST_ALERTS: ["since", "min_level", "agent"],
+    Intent.LIST_ALERTS: ["since", "min_level", "agent", "rule_id"],
     Intent.ALERT_STATS: ["group_by", "since"],
     Intent.EXPLAIN_RULE: ["rule_id"],
     Intent.SCA_SUMMARY: ["agent"],
@@ -355,6 +355,20 @@ def prepare_input(ctx: Context, node_input: types.Content) -> Event:
     text = _content_text(node_input)
     turns = ctx.state.get(TURNS_KEY) or []
     pending = ctx.state.get(PENDING_KEY)
+    if not turns:
+        # A session that has history but no turn log (e.g. history seeded by
+        # `agents-cli eval` continuation cases): use only the user's own earlier
+        # messages, never assistant text.
+        earlier = [
+            _content_text(e.content) for e in ctx.session.events if e.author == "user"
+        ]
+        if earlier and earlier[-1] == text:
+            earlier.pop()
+        turns = [
+            {"user": t[:300], "action": "(not recorded)"}
+            for t in earlier[-HISTORY_LIMIT:]
+            if t
+        ]
 
     sections = []
     if turns:
@@ -417,10 +431,12 @@ Only classify the message and extract parameters. Never answer the question.
 
 intent is exactly one of:
 - list_agents: list Wazuh agents / endpoints / hosts and their connection status
-- list_alerts: show recent alerts, events or detections (optional time window, minimum level, agent)
+- list_alerts: show recent alerts, events or detections (optional time window, minimum level,
+  agent, rule ID), e.g. "show alerts for rule 5712", "which alerts fired on lab-web-01"
 - alert_stats: counts, top N, breakdown or statistics of alerts grouped by rule, agent, level,
   group, source IP, MITRE technique or tactic
-- explain_rule: explain what a Wazuh rule (numeric rule ID) means, detects or why it fired
+- explain_rule: explain what a Wazuh rule (numeric rule ID) means or detects
+  ("what is rule 5712", "explain rule 5712"); listing the alerts of a rule is list_alerts
 - sca_summary: SCA / CIS benchmark / configuration assessment / hardening results of an agent
 - write_request: ANY request to change something, even combined with a read request: delete,
   remove, restart, stop, enable/disable, block or ban an IP, isolate a host, run an active
@@ -458,10 +474,19 @@ def _turn_log(ctx: Context, user_text: str, action: str) -> list[dict[str, str]]
     return turns[-HISTORY_LIMIT:]
 
 
+def _decision(action: str) -> types.Content:
+    """The routing decision as a thought part: visible in the playground trace and
+    in eval traces (state-only events are dropped there), never part of the reply."""
+    return types.Content(
+        role="model", parts=[types.Part(text=f"route_intent: {action}", thought=True)]
+    )
+
+
 def _text_result(
     ctx: Context, user_text: str, route: str, text: str, action: str, pending=None
 ) -> Event:
     return Event(
+        content=_decision(action),
         output=NodeResult(kind="text", text=text).model_dump(),
         route=route,
         state={PENDING_KEY: pending, TURNS_KEY: _turn_log(ctx, user_text, action)},
@@ -512,7 +537,7 @@ def route_intent(ctx: Context, node_input: IntentResult | None) -> Event | None:
         if value is not None and value != "":
             args[name] = value
     # Rule ids are read from the user's own words when present
-    if intent == Intent.EXPLAIN_RULE:
+    if "rule_id" in TOOL_ARGS[intent]:
         match = _RULE_IN_TEXT_RE.search(user_text) or (
             _BARE_NUMBER_RE.match(user_text) if pending else None
         )
@@ -534,13 +559,12 @@ def route_intent(ctx: Context, node_input: IntentResult | None) -> Event | None:
         )
 
     call = ", ".join(f"{k}={v}" for k, v in args.items())
+    action = f"ran {intent.value}({call})"
     return Event(
+        content=_decision(action),
         output=args,
         route=intent.value,
-        state={
-            PENDING_KEY: None,
-            TURNS_KEY: _turn_log(ctx, user_text, f"ran {intent.value}({call})"),
-        },
+        state={PENDING_KEY: None, TURNS_KEY: _turn_log(ctx, user_text, action)},
     )
 
 

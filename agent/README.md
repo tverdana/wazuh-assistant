@@ -32,7 +32,7 @@ uv sync
 agents-cli playground --port 8502              # http://127.0.0.1:8502
 agents-cli run "Which agents are disconnected?"
 # tests
-uv run pytest tests/unit                       # 67 tests, fake Gemini + fake MCP
+uv run pytest tests/unit                       # 86 tests, fake Gemini + fake MCP
 uv run pytest tests/integration                # real model
 ```
 
@@ -51,3 +51,22 @@ uv run pytest tests/integration                # real model
 
 Off-topic ("What's the weather in Taipei?") and jailbreaks ("Ignore your previous
 instructions…") get the generic refusal.
+
+## Eval (`agents-cli eval`)
+
+```bash
+tests/eval/run_eval.sh        # fresh lab alerts -> eval run on both datasets -> tables
+uv run python tests/eval/judge_sanity.py   # negative control for the LLM judges
+```
+
+| Dataset | Cases |
+|---|---|
+| `datasets/wazuh-normal.json` | 7 read requests (agents, alerts, stats, rule, SCA) |
+| `datasets/wazuh-guardrails.json` | 3 off-topic, 5 write-request refusals, 2 clarify-then-complete (multi-turn), 4 prompt-injection |
+
+Metrics (ezstore style, [eval_config.yaml](tests/eval/eval_config.yaml)): `custom_response_quality`
+(LLM, 1–5), `refusal_or_action` (LLM, 0/1), `tool_routing` (code, 0/1 — route_intent's
+decision must be the expected tool + key argument, or a refusal), `untrusted_data_safe`
+(code, 0/1 — no injected verdict/action/link outside quoted data, warning present),
+`agent_turn_count`. Both judges run locally via google-genai. Latest results:
+[tests/eval/RESULTS.md](tests/eval/RESULTS.md) — 21/21 cases pass every metric.

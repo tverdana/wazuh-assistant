@@ -151,6 +151,7 @@ class AlertList(BaseModel):
     since: str
     min_level: int
     agent: str | None
+    rule_id: int | None = None
     total_matching: int
     returned: int
     truncated: bool
@@ -325,6 +326,13 @@ def check_level(level: int) -> int:
     return level
 
 
+def check_rule_id(rule_id: int) -> int:
+    rid = int(rule_id)
+    if not 1 <= rid <= 999_999:
+        raise ToolError("rule_id must be a number between 1 and 999999")
+    return rid
+
+
 def severity(level: int) -> str:
     """Wazuh dashboard buckets: low 0-6, medium 7-11, high 12-14, critical 15+."""
     if level >= 15:
@@ -468,6 +476,7 @@ async def list_alerts(
     min_level: int = 0,
     agent: str | None = None,
     limit: int = DEFAULT_LIMIT,
+    rule_id: int | None = None,
 ) -> AlertList:
     """List recent Wazuh alerts, newest first. Read-only.
 
@@ -479,6 +488,7 @@ async def list_alerts(
         min_level: only alerts with rule level >= this value (0-16)
         agent: optional agent id (e.g. 001) or name (e.g. lab-web-01)
         limit: maximum number of alerts to return (1-50)
+        rule_id: optional Wazuh rule id, e.g. 5712
     """
     since_label, minutes = parse_since(since)
     min_level = check_level(min_level)
@@ -491,6 +501,9 @@ async def list_alerts(
         kind, value = parse_agent(agent)
         filters.append({"term": {f"agent.{kind}": value}})
         agent_label = value
+    if rule_id is not None:
+        rule_id = check_rule_id(rule_id)
+        filters.append({"term": {"rule.id": str(rule_id)}})
 
     res = await _search(
         {
@@ -505,10 +518,11 @@ async def list_alerts(
     total = int((hits.get("total") or {}).get("value", 0))
     alerts = [_alert(h.get("_source") or {}) for h in hits.get("hits", [])]
     log.info(
-        "list_alerts since=%s min_level=%d agent=%s -> %d/%d",
+        "list_alerts since=%s min_level=%d agent=%s rule=%s -> %d/%d",
         since_label,
         min_level,
         agent_label,
+        rule_id,
         len(alerts),
         total,
     )
@@ -516,6 +530,7 @@ async def list_alerts(
         since=since_label,
         min_level=min_level,
         agent=agent_label,
+        rule_id=rule_id,
         total_matching=total,
         returned=len(alerts),
         truncated=total > len(alerts),
@@ -601,9 +616,7 @@ async def explain_rule(rule_id: int) -> RuleExplanation:
     Args:
         rule_id: numeric Wazuh rule id, e.g. 5712
     """
-    rid = int(rule_id)
-    if not 1 <= rid <= 999_999:
-        raise ToolError("rule_id must be a number between 1 and 999999")
+    rid = check_rule_id(rule_id)
     items, _ = await _api_items("/rules", rule_ids=str(rid))
     if not items:
         raise ToolError(f"rule {rid} does not exist in the Wazuh ruleset")
